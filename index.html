@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Optimum Dash - Beta</title>
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #f0f2f5;
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+            overflow: hidden;
+        }
+
+        #game-container {
+            width: 100%;
+            max-width: 800px;
+            height: 100%;
+            max-height: 450px;
+            border: 2px solid #e0e0e0;
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.15);
+            position: relative;
+            background-color: #0d1a3a;
+            overflow: hidden;
+            border-radius: 10px;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        .ui-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            color: white;
+            background-color: rgba(0, 21, 66, 0.8);
+            backdrop-filter: blur(5px);
+            z-index: 10;
+            transition: opacity 0.3s ease-in-out;
+        }
+        
+        .ui-overlay.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .ui-overlay h1 {
+            font-size: 48px;
+            margin: 0;
+            color: #ff6600;
+            text-shadow: 0 0 10px rgba(255, 102, 0, 0.7);
+        }
+
+        .ui-overlay p {
+            font-size: 18px;
+            max-width: 80%;
+            margin: 20px 0;
+        }
+        
+        .ui-button {
+            background-color: #ff6600;
+            color: white;
+            padding: 15px 40px;
+            border: none;
+            border-radius: 8px;
+            font-weight: bold;
+            font-size: 20px;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-decoration: none;
+        }
+
+        .ui-button:hover {
+            background-color: #e65c00;
+            transform: translateY(-3px);
+            box-shadow: 0 4px 15px rgba(255, 102, 0, 0.4);
+        }
+
+        .ui-button.secondary {
+            background-color: transparent;
+            border: 2px solid #fff;
+            margin-top: 15px;
+        }
+
+        .ui-button.secondary:hover {
+            background-color: #fff;
+            color: #0033a0;
+            transform: translateY(-3px);
+            box-shadow: none;
+        }
+
+        #score-display {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            font-size: 24px;
+            font-weight: bold;
+            color: white;
+            z-index: 5;
+            text-shadow: 1px 1px 3px rgba(0,0,0,0.5);
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <div id="score-display">Score: 0</div>
+        <div id="start-screen" class="ui-overlay">
+            <h1>Optimum Dash</h1>
+            <p>Tap for a small hop, or HOLD to jump higher! Collect data orbs (💻), avoid buffering wheels, and grab the Fiber Power-Up (F) to blast through!</p>
+            <button id="start-button" class="ui-button">Start Game</button>
+        </div>
+        <div id="game-over-screen" class="ui-overlay hidden">
+            <h1 id="game-over-title">Tired of Lag?</h1>
+            <p id="final-score">You scored 0 points!</p>
+            <p>With Optimum Fiber, you can blast past buffering for good.</p>
+            <a href="https://www.optimum.com/internet" target="_blank" class="ui-button">Get Real Speed</a>
+            <button id="play-again-button" class="ui-button secondary">Play Again</button>
+        </div>
+        <canvas id="game-canvas"></canvas>
+    </div>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const canvas = document.getElementById('game-canvas');
+        const ctx = canvas.getContext('2d');
+        const gameContainer = document.getElementById('game-container');
+
+        const startScreen = document.getElementById('start-screen');
+        const gameOverScreen = document.getElementById('game-over-screen');
+        const startButton = document.getElementById('start-button');
+        const playAgainButton = document.getElementById('play-again-button');
+        const scoreDisplay = document.getElementById('score-display');
+        const finalScoreDisplay = document.getElementById('final-score');
+
+        let scale;
+        let player, obstacles, collectibles, gameSpeed, score, isGameOver, isInvincible, invincibilityTimer, animationFrameId, isJumpingKeyDown;
+        
+        // --- GAMEPLAY TUNING ---
+        const INITIAL_GAME_SPEED = 3.5;
+        const GAME_SPEED_INCREMENT = 0.001;
+        const GRAVITY = 0.45; // Reduced gravity for a "floatier" feel
+        const JUMP_STRENGTH = -12; // Increased jump power
+        const JUMP_RELEASE_DAMPENER = 0.5; // Multiplier to cut jump short on release
+
+        function resizeCanvas() {
+            canvas.width = gameContainer.clientWidth;
+            canvas.height = gameContainer.clientHeight;
+            scale = canvas.height / 450;
+        }
+
+        class Player {
+            constructor() {
+                this.x = 100 * scale;
+                this.y = canvas.height - 50 * scale;
+                this.radius = 20 * scale;
+                this.velocityY = 0;
+                this.onGround = true;
+            }
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.lineWidth = 5 * scale;
+                ctx.strokeStyle = '#00a9e0';
+                
+                if (isInvincible) {
+                    ctx.fillStyle = 'rgba(0, 169, 224, 0.3)';
+                    ctx.shadowBlur = 20;
+                    ctx.shadowColor = '#00a9e0';
+                    ctx.fill();
+                }
+                ctx.shadowBlur = 0;
+                ctx.stroke();
+                ctx.shadowBlur = 0;
+            }
+            update() {
+                this.velocityY += GRAVITY * scale;
+                this.y += this.velocityY;
+
+                if (this.y + this.radius > canvas.height - 20 * scale) {
+                    this.y = canvas.height - 20 * scale - this.radius;
+                    this.velocityY = 0;
+                    this.onGround = true;
+                } else {
+                    this.onGround = false;
+                }
+                this.draw();
+            }
+            jump() {
+                if (this.onGround) {
+                    this.velocityY = JUMP_STRENGTH * scale;
+                    this.onGround = false;
+                }
+            }
+            // New function for variable jump height
+            cutJump() {
+                if (this.velocityY < 0) { // Only cut jump if moving upwards
+                    this.velocityY *= JUMP_RELEASE_DAMPENER;
+                }
+            }
+        }
+
+        class GameObject {
+            constructor(x, y, radius, type) {
+                this.x = x;
+                this.y = y;
+                this.radius = radius;
+                this.type = type;
+                this.rotation = 0;
+            }
+            draw() {
+                if (this.type === 'obstacle') {
+                    ctx.save();
+                    ctx.translate(this.x, this.y);
+                    ctx.rotate(this.rotation);
+                    ctx.beginPath();
+                    ctx.arc(0, 0, this.radius, 0, Math.PI * 1.5);
+                    ctx.lineWidth = 4 * scale;
+                    ctx.strokeStyle = '#d9534f';
+                    ctx.setLineDash([5 * scale, 5 * scale]);
+                    ctx.stroke();
+                    ctx.restore();
+                } else if (this.type === 'collectible') {
+                    ctx.font = `${this.radius * 1.5}px sans-serif`;
+                    ctx.fillText('💻', this.x - this.radius, this.y + this.radius / 2);
+                } else if (this.type === 'powerup') {
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                    ctx.fillStyle = '#ff6600';
+                    ctx.fill();
+                    ctx.shadowBlur = 15;
+                    ctx.shadowColor = '#ff6600';
+                    ctx.font = `bold ${this.radius * 1.2}px sans-serif`;
+                    ctx.fillStyle = 'white';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText('F', this.x, this.y);
+                    ctx.shadowBlur = 0;
+                    ctx.textAlign = 'start';
+                    ctx.textBaseline = 'alphabetic';
+                }
+            }
+            update() {
+                this.x -= gameSpeed * scale;
+                if (this.type === 'obstacle') {
+                    this.rotation += 0.05;
+                }
+                this.draw();
+            }
+        }
+        
+        function handleObjects() {
+            if (Math.random() < 0.02) {
+                const radius = (Math.random() * 15 + 15) * scale;
+                obstacles.push(new GameObject(canvas.width + radius, canvas.height - 20 * scale - radius, radius, 'obstacle'));
+            }
+            if (Math.random() < 0.015) {
+                const radius = 15 * scale;
+                collectibles.push(new GameObject(canvas.width + radius, Math.random() * (canvas.height * 0.6) + (canvas.height * 0.1), radius, 'collectible'));
+            }
+            if (Math.random() < 0.002 && !isInvincible) {
+                collectibles.push(new GameObject(canvas.width + 20 * scale, Math.random() * (canvas.height / 2) + (canvas.height / 4), 20 * scale, 'powerup'));
+            }
+
+            obstacles = obstacles.filter(o => o.x + o.radius > 0);
+            obstacles.forEach(o => o.update());
+            collectibles = collectibles.filter(c => c.x + c.radius > 0);
+            collectibles.forEach(c => c.update());
+        }
+
+        function checkCollisions() {
+            for (let i = obstacles.length - 1; i >= 0; i--) {
+                if (Math.hypot(player.x - obstacles[i].x, player.y - obstacles[i].y) < player.radius + obstacles[i].radius) {
+                    if (isInvincible) {
+                        obstacles.splice(i, 1);
+                        score += 50;
+                    } else {
+                        endGame();
+                        return;
+                    }
+                }
+            }
+            for (let i = collectibles.length - 1; i >= 0; i--) {
+                if (Math.hypot(player.x - collectibles[i].x, player.y - collectibles[i].y) < player.radius + collectibles[i].radius) {
+                    if (collectibles[i].type === 'powerup') {
+                        isInvincible = true;
+                        invincibilityTimer = 300;
+                        gameSpeed *= 1.5;
+                    } else {
+                        score += 100;
+                    }
+                    collectibles.splice(i, 1);
+                }
+            }
+        }
+
+        function resetGame() {
+            resizeCanvas();
+            player = new Player();
+            obstacles = [];
+            collectibles = [];
+            gameSpeed = INITIAL_GAME_SPEED;
+            score = 0;
+            isGameOver = false;
+            isInvincible = false;
+            invincibilityTimer = 0;
+            isJumpingKeyDown = false;
+            scoreDisplay.textContent = 'Score: 0';
+        }
+
+        function startGame() {
+            resetGame();
+            startScreen.classList.add('hidden');
+            gameOverScreen.classList.add('hidden');
+            isGameOver = false;
+            animate();
+        }
+
+        function endGame() {
+            isGameOver = true;
+            cancelAnimationFrame(animationFrameId);
+            finalScoreDisplay.textContent = `You scored ${score} points!`;
+            gameOverScreen.classList.remove('hidden');
+        }
+
+        function animate() {
+            if (isGameOver) return;
+            animationFrameId = requestAnimationFrame(animate);
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            player.update();
+            handleObjects();
+            checkCollisions();
+            
+            score++;
+            scoreDisplay.textContent = `Score: ${score}`;
+            gameSpeed += GAME_SPEED_INCREMENT;
+
+            if (isInvincible) {
+                invincibilityTimer--;
+                if (invincibilityTimer <= 0) {
+                    isInvincible = false;
+                    gameSpeed /= 1.5;
+                }
+            }
+        }
+        
+        function initialSetup() {
+            resizeCanvas();
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            startScreen.classList.remove('hidden');
+            gameOverScreen.classList.add('hidden');
+        }
+
+        // --- Event Listeners for Better Controls ---
+        startButton.addEventListener('click', (e) => {
+            e.stopPropagation();
+            startGame();
+        });
+        playAgainButton.addEventListener('click', (e) => {
+            e.stopPropagation();
+            startGame();
+        });
+
+        // Keyboard controls
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space' && !isGameOver && !isJumpingKeyDown) {
+                isJumpingKeyDown = true;
+                player.jump();
+            }
+        });
+        window.addEventListener('keyup', (e) => {
+            if (e.code === 'Space' && !isGameOver) {
+                isJumpingKeyDown = false;
+                player.cutJump();
+            }
+        });
+
+        // Touch/Mouse controls
+        gameContainer.addEventListener('pointerdown', (e) => {
+            if (e.target === startButton || e.target === playAgainButton) return;
+            if (startScreen.classList.contains('hidden') === false) {
+                startGame();
+            } else if (!isGameOver) {
+                player.jump();
+            }
+        });
+        gameContainer.addEventListener('pointerup', () => {
+            if (!isGameOver) {
+                player.cutJump();
+            }
+        });
+
+        window.addEventListener('resize', initialSetup);
+        initialSetup();
+    });
+    </script>
+</body>
+</html>
